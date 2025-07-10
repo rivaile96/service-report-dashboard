@@ -91,3 +91,105 @@ class DataHandler:
             "top_customers": df['Customer Name'].value_counts().head(5).to_dict(),
             "common_problems": df['Problem'].value_counts().head(5).to_dict()
         }
+
+    def _calculate_units_in_trend(self, df, period_char, date_column='Date In', num_periods=None):
+        """Helper function to calculate trends.
+        period_char: 'D' for daily, 'W' for weekly, 'M' for monthly
+        num_periods: number of past periods to include (e.g., 30 for last 30 days)
+        """
+        if df is None or df.empty or date_column not in df.columns:
+            return {}
+
+        # Ensure date_column is datetime
+        df[date_column] = pd.to_datetime(df[date_column], errors='coerce')
+        # Drop rows where date conversion failed
+        df_filtered = df.dropna(subset=[date_column])
+        if df_filtered.empty:
+            return {}
+
+        # Set date_column as index for resampling
+        df_indexed = df_filtered.set_index(date_column)
+
+        # Resample and count
+        trend = df_indexed.resample(period_char).size()
+
+        if num_periods:
+            trend = trend.tail(num_periods)
+
+        # Format for JSON (especially for weekly period objects)
+        if period_char == 'W':
+             # Convert Period objects to string for weekly data e.g. 2023-W34
+            return {item.strftime('%Y-W%U'): count for item, count in trend.items()}
+        else:
+            return {item.strftime('%Y-%m-%d' if period_char == 'D' else '%Y-%m'): count for item, count in trend.items()}
+
+    def _get_distribution_by_column(self, df, column_name):
+        if df is None or df.empty or column_name not in df.columns:
+            return {}
+        return df[column_name].value_counts().to_dict()
+
+    def _get_top_n_by_column(self, df, column_name, n=5):
+        if df is None or df.empty or column_name not in df.columns:
+            return []
+
+        top_n = df[column_name].value_counts().nlargest(n)
+        return [{"item": index, "count": value} for index, value in top_n.items()]
+
+    def get_dashboard_statistics(self, top_n_count=5):
+        """
+        Calculates and returns a dictionary of statistics for the dashboard.
+
+        Args:
+            top_n_count (int): The number of top items (e.g., models, companies) to return.
+
+        Returns:
+            dict: A dictionary containing various statistics:
+                - "total_units_in": Total number of records.
+                - "units_in_trend": Dict with "daily", "weekly", "monthly" trends.
+                    Each trend is a dict of {period_string: count}.
+                - "units_by_model": Dict of {model_name: count}.
+                - "top_n_models": List of dicts [{"model": name, "count": value}].
+                - "units_by_company": Dict of {company_name: count}.
+                - "top_n_companies": List of dicts [{"company": name, "count": value}].
+        """
+        df = self.load_data()
+
+        if df is None or df.empty:
+            return {
+                "total_units_in": 0,
+                "units_in_trend": {"daily": {}, "weekly": {}, "monthly": {}},
+                "units_by_model": {},
+                "top_n_models": [],
+                "units_by_company": {},
+                "top_n_companies": []
+            }
+
+        total_units_in = len(df)
+
+        # Trends: Last 30 days, last 12 weeks, last 12 months
+        daily_trend = self._calculate_units_in_trend(df.copy(), 'D', num_periods=30)
+        weekly_trend = self._calculate_units_in_trend(df.copy(), 'W', num_periods=12)
+        monthly_trend = self._calculate_units_in_trend(df.copy(), 'M', num_periods=12)
+
+        units_by_model = self._get_distribution_by_column(df, 'Item')
+        # In top_n_models, the key for item name should match the frontend design, e.g. 'model'
+        top_n_models = [{'model': item['item'], 'count': item['count']}
+                        for item in self._get_top_n_by_column(df, 'Item', n=top_n_count)]
+
+        units_by_company = self._get_distribution_by_column(df, 'Customer Name')
+        # In top_n_companies, the key for item name should match the frontend design, e.g. 'company'
+        top_n_companies = [{'company': item['item'], 'count': item['count']}
+                           for item in self._get_top_n_by_column(df, 'Customer Name', n=top_n_count)]
+
+        return {
+            "total_units_in": total_units_in,
+            "units_in_trend": {
+                "daily": daily_trend,
+                "weekly": weekly_trend,
+                "monthly": monthly_trend
+            },
+            "units_by_model": units_by_model,
+            "top_n_models": top_n_models,
+            "units_by_company": units_by_company,
+            "top_n_companies": top_n_companies
+        }
